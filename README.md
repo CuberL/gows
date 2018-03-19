@@ -20,6 +20,9 @@ import (
 
 func main() {
 	gows.New("localhost", 8091, func(conn *gows.Conn) {
+		conn.Ping(30, func(conn *gows.Conn) {
+			fmt.Println("ping timeout.")
+		})
 		for {
 			data, err := conn.Read()
 			if err != nil {

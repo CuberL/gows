@@ -10,12 +10,18 @@ import (
 	"net"
 	"net/textproto"
 	"strings"
+	"sync"
+	"time"
 )
 
 const ConnUUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 type Conn struct {
-	conn net.Conn
+	conn       net.Conn
+	readMutex  sync.Mutex
+	CancelPing func()
+	pong       chan (bool)
+	buf        chan ([]byte)
 }
 
 const (
@@ -24,7 +30,7 @@ const (
 	OpcodeBinaryData      = 0x02
 	OpcodeConnectionClose = 0x08
 	OpcodePing            = 0x09
-	OpcodePong            = 0x10
+	OpcodePong            = 0x0A
 )
 
 func (c *Conn) getHeaders() (map[string]string, error) {
@@ -76,6 +82,8 @@ func (c *Conn) connHandler(callback acceptCallback) {
 	acceptKey := c.calAcceptKey(secKey)
 	// send response msg
 	c.sendResponse(acceptKey)
+	c.buf = make(chan ([]byte), 1024)
+	go c.readLoop()
 	// call the callback
 	callback(c)
 }
@@ -137,54 +145,112 @@ func (c *Conn) xorData(mask []byte, maskedData []byte) []byte {
 	return maskedData[:length]
 }
 
+func (c *Conn) readLoop() {
+	for {
+		headerBytes := make([]byte, 2)
+		l, err := c.conn.Read(headerBytes)
+		if l <= 0 || err != nil {
+			c.buf <- make([]byte, 0)
+			c.CancelPing()
+			return
+		}
+		//	fin := c.readFin(headerBytes[0])
+		opcode := c.readOpcode(headerBytes[0])
+		if opcode == OpcodeConnectionClose {
+			c.buf <- make([]byte, 0)
+			c.CancelPing()
+			return
+		} else if opcode == OpcodePong {
+			packLen := c.readLen(headerBytes[1])
+			isMask := c.readIsMask(headerBytes[1])
+			var dropData []byte
+			if isMask {
+				dropData = make([]byte, packLen+4)
+			} else {
+				dropData = make([]byte, packLen)
+			}
+			c.conn.Read(dropData)
+			c.pong <- true
+			continue
+		}
+		isMask := c.readIsMask(headerBytes[1])
+		packLen := c.readLen(headerBytes[1])
+		if isMask {
+			mask := c.readMask()
+			maskedData := make([]byte, packLen)
+			c.conn.Read(maskedData)
+			realData := c.xorData(mask, maskedData)
+			fmt.Println(realData)
+			c.buf <- realData
+		} else {
+			data := make([]byte, packLen)
+			c.conn.Read(data)
+			c.buf <- data
+		}
+	}
+}
+
 func (c *Conn) Read() ([]byte, error) {
-	headerBytes := make([]byte, 2)
-	l, err := c.conn.Read(headerBytes)
-	if l <= 0 || err != nil {
-		return make([]byte, 0), err
-	}
-	//	fin := c.readFin(headerBytes[0])
-	//	opcode := c.readOpcode(headerBytes[0])
-	opcode := c.readOpcode(headerBytes[0])
-	if opcode == OpcodeConnectionClose {
-		return make([]byte, 0), io.EOF
-	}
-	isMask := c.readIsMask(headerBytes[1])
-	packLen := c.readLen(headerBytes[1])
-	if isMask {
-		mask := c.readMask()
-		maskedData := make([]byte, packLen)
-		c.conn.Read(maskedData)
-		realData := c.xorData(mask, maskedData)
-		return realData, nil
+	data := <-c.buf
+	if len(data) == 0 {
+		return data, io.EOF
 	} else {
-		data := make([]byte, packLen)
-		c.conn.Read(data)
 		return data, nil
 	}
 }
 
-// implement the io.Writer interface
-func (c *Conn) Write(b []byte) (n int, err error) {
+func (c *Conn) Ping(interval int, errCallback func(*Conn)) {
+	cancel := make(chan (bool))
+	c.pong = make(chan (bool))
+	c.CancelPing = func() {
+		cancel <- true
+	}
+	go func(cancel chan (bool), c *Conn) {
+		for {
+			select {
+			case <-time.After(time.Duration(interval) * time.Second):
+				pack := c.makeSendData(OpcodePing, []byte(""))
+				c.conn.Write(pack)
+				// waiting for response
+				select {
+				case <-time.After(time.Duration(interval) * time.Second):
+					errCallback(c)
+					return
+				case <-c.pong:
+				}
+			case <-cancel:
+				return
+			}
+		}
+	}(cancel, c)
+}
+
+func (c *Conn) makeSendData(opcode int, b []byte) []byte {
 	length := len(b)
 	var pack []byte
 	if length <= 125 {
 		pack = make([]byte, 2+length)
-		pack[0] = byte(129)
+		pack[0] = byte(128 | opcode)
 		pack[1] = byte(length)
 		copy(pack[2:], b[:])
 	} else if length > 125 && length <= 0xffff {
 		pack = make([]byte, 4+length)
-		pack[0] = byte(129)
+		pack[0] = byte(128 | opcode)
 		pack[1] = byte(126)
 		binary.BigEndian.PutUint16(pack[2:4], uint16(length))
 		copy(pack[4:], b[:])
 	} else {
 		pack = make([]byte, 10+length)
-		pack[0] = byte(129)
+		pack[0] = byte(128 | opcode)
 		pack[1] = byte(127)
 		binary.BigEndian.PutUint64(pack[2:10], uint64(length))
 		copy(pack[10:], b[:])
 	}
+	return pack
+}
+
+// implement the io.Writer interface
+func (c *Conn) Write(b []byte) (n int, err error) {
+	pack := c.makeSendData(OpcodeTextData, b)
 	return c.conn.Write(pack)
 }
