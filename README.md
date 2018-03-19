@@ -4,7 +4,7 @@ a simple implement of websocket written in go
 
 ## Install
 
-```shell
+```
 go get gitee.com/cuberl/gows
 ```
 
