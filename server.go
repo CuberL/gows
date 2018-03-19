@@ -9,12 +9,12 @@ type acceptCallback func(conn *Conn)
 
 type Server struct {
 	Host     string
-	Port     uint32
+	Port     int
 	server   net.Listener
 	callback acceptCallback
 }
 
-func New(Host string, Port uint32, callback acceptCallback) *Server {
+func New(Host string, Port int, callback acceptCallback) *Server {
 	return &Server{
 		Host:     Host,
 		Port:     Port,
