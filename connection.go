@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"net"
 	"net/textproto"
 	"strings"
@@ -16,6 +17,15 @@ const ConnUUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 type Conn struct {
 	conn net.Conn
 }
+
+const (
+	OpcodeExtraData       = 0x00
+	OpcodeTextData        = 0x01
+	OpcodeBinaryData      = 0x02
+	OpcodeConnectionClose = 0x08
+	OpcodePing            = 0x09
+	OpcodePong            = 0x10
+)
 
 func (c *Conn) getHeaders() (map[string]string, error) {
 	reader := textproto.NewReader(bufio.NewReader(c.conn))
@@ -127,16 +137,18 @@ func (c *Conn) xorData(mask []byte, maskedData []byte) []byte {
 	return maskedData[:length]
 }
 
-func (c *Conn) Read() []byte {
+func (c *Conn) Read() ([]byte, error) {
 	headerBytes := make([]byte, 2)
 	l, err := c.conn.Read(headerBytes)
 	if l <= 0 || err != nil {
-		fmt.Println(err)
-		fmt.Println("err found")
-		return headerBytes
+		return make([]byte, 0), err
 	}
 	//	fin := c.readFin(headerBytes[0])
 	//	opcode := c.readOpcode(headerBytes[0])
+	opcode := c.readOpcode(headerBytes[0])
+	if opcode == OpcodeConnectionClose {
+		return make([]byte, 0), io.EOF
+	}
 	isMask := c.readIsMask(headerBytes[1])
 	packLen := c.readLen(headerBytes[1])
 	if isMask {
@@ -144,11 +156,11 @@ func (c *Conn) Read() []byte {
 		maskedData := make([]byte, packLen)
 		c.conn.Read(maskedData)
 		realData := c.xorData(mask, maskedData)
-		return realData
+		return realData, nil
 	} else {
 		data := make([]byte, packLen)
 		c.conn.Read(data)
-		return data
+		return data, nil
 	}
 }
 
