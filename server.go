@@ -5,16 +5,18 @@ import (
 	"net"
 )
 
-type acceptCallback func(conn *Conn)
+type AcceptCallback func(conn *Conn)
 
 type Server struct {
 	Host     string
 	Port     int
 	server   net.Listener
-	callback acceptCallback
+	callback AcceptCallback
 }
 
-func New(Host string, Port int, callback acceptCallback) *Server {
+// It will listen the addr (Host):(Port).
+// the callback will be call when a connection is accepted.
+func New(Host string, Port int, callback AcceptCallback) *Server {
 	return &Server{
 		Host:     Host,
 		Port:     Port,
@@ -22,6 +24,7 @@ func New(Host string, Port int, callback acceptCallback) *Server {
 	}
 }
 
+// Start to listening the port you specified
 func (s *Server) Start() {
 	var err error
 	s.server, err = net.Listen("tcp", fmt.Sprintf("%s:%d", s.Host, s.Port))

@@ -17,9 +17,10 @@ import (
 const ConnUUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 type Conn struct {
+	Addr       net.Addr
 	conn       net.Conn
 	readMutex  sync.Mutex
-	CancelPing func()
+	cancelPing func()
 	pong       chan (bool)
 	buf        chan ([]byte)
 }
@@ -69,7 +70,8 @@ func (c *Conn) sendResponse(key string) {
 	c.conn.Write([]byte("\r\n"))
 }
 
-func (c *Conn) connHandler(callback acceptCallback) {
+func (c *Conn) connHandler(callback AcceptCallback) {
+	c.Addr = c.conn.RemoteAddr()
 	// get headers
 	headers, err := c.getHeaders()
 	if err != nil {
@@ -190,6 +192,9 @@ func (c *Conn) readLoop() {
 	}
 }
 
+// Read a frame from client,
+// It will return io.EOF when the connection is closed,
+// It will be block if there is not data yet.
 func (c *Conn) Read() ([]byte, error) {
 	data := <-c.buf
 	if len(data) == 0 {
@@ -199,10 +204,14 @@ func (c *Conn) Read() ([]byte, error) {
 	}
 }
 
+// Start to send keepalive data to client,
+// It will ping client per (interval) seconds,
+// the errCallback will be call when pong client didn't arrive in (interval) seconds,
+// you can call CancelPing to cancel it.
 func (c *Conn) Ping(interval int, errCallback func(*Conn)) {
 	cancel := make(chan (bool))
 	c.pong = make(chan (bool))
-	c.CancelPing = func() {
+	c.cancelPing = func() {
 		cancel <- true
 	}
 	go func(cancel chan (bool), c *Conn) {
@@ -223,6 +232,13 @@ func (c *Conn) Ping(interval int, errCallback func(*Conn)) {
 			}
 		}
 	}(cancel, c)
+}
+
+// Cancel to send keepalive to client.
+func (c *Conn) CancelPing() {
+	if c.cancelPing != nil {
+		c.cancelPing()
+	}
 }
 
 func (c *Conn) makeSendData(opcode int, b []byte) []byte {
@@ -249,7 +265,8 @@ func (c *Conn) makeSendData(opcode int, b []byte) []byte {
 	return pack
 }
 
-// implement the io.Writer interface
+// This function implements the interface io.Writer,
+// So you can write data to websocket like a file
 func (c *Conn) Write(b []byte) (n int, err error) {
 	pack := c.makeSendData(OpcodeTextData, b)
 	return c.conn.Write(pack)
