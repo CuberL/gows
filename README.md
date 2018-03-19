@@ -5,7 +5,7 @@ a simple implement of websocket written in go
 ## Install
 
 ```
-go get gitee.com/cuberl/gows
+go get github.com/cuberl/gows
 ```
 
 ## Usage
@@ -15,7 +15,7 @@ import (
 	"fmt"
 	"io"
 
-	"gitee.com/cuberl/gows"
+	"github.com/cuberl/gows"
 )
 
 func main() {

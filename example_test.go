@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"io"
 
-	"gitee.com/cuberl/gows"
+	"github.com/cuberl/gows"
 )
 
 func Example() {
